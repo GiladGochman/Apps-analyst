@@ -1,185 +1,144 @@
-import sys
 import subprocess
-
-# from config import load_config
 import sys
-import subprocess
-#import pkg_resources
+from importlib import metadata
 
-from utils.llm_setup import check_and_pull_model 
+from ui_services import AnalysisService, ScanService
 
-# dummy constants for debug substitutions
-DUMMY_REGISTRY_APPS = [{"name": "checkpointVPN", "version": "1.0"},{"name": "teamviewer", "version": "1.0"}, {"name": "vnc", "version": "2.0"}]
-DUMMY_EXE_APPS = [{"name": "dummy.exe", "install_location": "C:\\dummy.exe"}]
-DUMMY_WEB_INFO = "- Title: Dummy\n  Info: No real data\n"
-DUMMY_LLM_RESPONSE = "Remote Administration: no\nRemote File Sharing: no\nKeylogging: no\nServer Hosting: no"
 
-def install_missing_requirements():
+def configure_console_output():
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except ValueError:
+                pass
+
+
+def install_missing_requirements(auto_confirm=False):
     requirements_file = "requirements.txt"
     try:
-        import pkg_resources
         with open(requirements_file, "r") as f:
             requirements = [line.strip() for line in f if line.strip() and not line.startswith("#")]
-        
+
         missing = []
         for requirement in requirements:
+            package_name = requirement.split("==")[0].split(">=")[0].split("<=")[0].strip()
             try:
-                pkg_resources.require(requirement)
-            except (pkg_resources.DistributionNotFound, pkg_resources.VersionConflict):
+                metadata.version(package_name)
+            except metadata.PackageNotFoundError:
                 missing.append(requirement)
-        
-        if missing:
-            print(f"[*] Missing packages found: {missing}. Installing...")
-            try:
-                # Adding --user handles the Permission Denied error automatically
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", *missing])
-                print("[*] All packages installed successfully.")
-            except subprocess.CalledProcessError:
-                print("[!] Pip installation failed. Try running as Administrator.")
-        else:
+
+        if not missing:
             print("[*] All requirements are already met.")
-            
-    except FileNotFoundError:
-        print("[!] requirements.txt not found. Skipping auto-install.")
-    except Exception as e:
-        print(f"[!] Auto-install failed: {e}") 
-    requirements_file = "requirements.txt"
-    
-    try:
-        with open(requirements_file, "r") as f:
-            requirements = [line.strip() for line in f if line.strip() and not line.startswith("#")]
-        
-        missing = []
-        for requirement in requirements:
-            # Extract package name (handle ==, >=, <= operators)
-            pkg_name = requirement.split("==")[0].split(">=")[0].split("<=")[0].strip()
-            
-            try:
-                # Try importlib.metadata first (Python 3.8+)
-                try:
-                    from importlib import metadata
-                    metadata.version(pkg_name)
-                except (ImportError, Exception):
-                    # Fallback: try direct import
-                    __import__(pkg_name)
-            except Exception:
-                missing.append(requirement)
-        
-        if missing:
-            print(f"[*] Missing packages found: {missing}. Installing...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
+            return True
+
+        if not auto_confirm:
+            print(f"[!] Missing packages found: {missing}.")
+            print("[!] Install them yourself with:")
+            print(f"    python -m pip install --user {' '.join(missing)}")
+            print("[!] ...or re-run this program with --install-deps to install them automatically.")
+            return False
+
+        print(f"[*] Missing packages found: {missing}. Installing...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", *missing])
             print("[*] All packages installed successfully.")
-        else:
-            print("[*] All requirements are already met.")
-            
+            return True
+        except subprocess.CalledProcessError:
+            print("[!] Pip installation failed. Try running as Administrator.")
+            return False
+
     except FileNotFoundError:
         print("[!] requirements.txt not found. Skipping auto-install.")
+        return True
     except Exception as e:
         print(f"[!] Auto-install failed: {e}")
+        return True
+
 
 def setup_llm(progress_callback=None):
-    # Initialize LLM: check and pull model if needed
-    from utils.llm_setup import check_and_pull_model
     print("[i] Setting up LLM...")
-    return check_and_pull_model(progress_callback=progress_callback)
+    return AnalysisService.ensure_model(progress_callback=progress_callback)
+
 
 def scan_apps():
-    from collectors.win_apps_scanner import WinAppsScanner
-    scanner = WinAppsScanner()
-    return scanner.scan()
+    return ScanService.scan()
 
 
-def select_app(registry_apps, exe_apps):
-    app_to_analyze = None
-    if registry_apps or exe_apps:
-        print("\nRegistry applications:")
-        for idx, app in enumerate(registry_apps, start=1):
-            print(f"  {idx}. {app['name']}")
-        print("\nExecutable files:")
-        for idx, app in enumerate(exe_apps, start=1):
-            print(f"  {idx}. {app['name']}")
+def select_app(apps):
+    registry_apps = [app for app in apps if app.source_kind == "Registry"]
+    exe_apps = [app for app in apps if app.source_kind == "Filesystem"]
 
-        category = input("Select category (r=registry, e=exe): ").strip().lower()
-        try:
-            if category.startswith('r') and registry_apps:
-                num = int(input("Enter registry program number: ").strip())
-                app_to_analyze = registry_apps[num-1]
-            elif category.startswith('e') and exe_apps:
-                num = int(input("Enter exe file number: ").strip())
-                app_to_analyze = exe_apps[num-1]
-            else:
-                print("[!] Invalid selection or empty list.")
-        except (ValueError, IndexError):
-            print("[!] Selection out of range or invalid.")
-    else:
+    if not registry_apps and not exe_apps:
         print("[!] No apps available to select.")
-    return app_to_analyze
+        return None
+
+    print("\nRegistry applications:")
+    for idx, app in enumerate(registry_apps, start=1):
+        print(f"  {idx}. {app.name}")
+    print("\nExecutable files:")
+    for idx, app in enumerate(exe_apps, start=1):
+        print(f"  {idx}. {app.name}")
+
+    try:
+        category = input("Select category (r=registry, e=exe): ").strip().lower()
+        if category.startswith("r") and registry_apps:
+            num = int(input("Enter registry program number: ").strip())
+            return registry_apps[num - 1]
+        if category.startswith("e") and exe_apps:
+            num = int(input("Enter exe file number: ").strip())
+            return exe_apps[num - 1]
+        print("[!] Invalid selection or empty list.")
+    except (ValueError, IndexError):
+        print("[!] Selection out of range or invalid.")
+    except EOFError:
+        print("[!] No input received; skipping selection.")
+    return None
 
 
-def research_web(app):
-    from analysis.web_researcher import search_web_info
-    print(f"[*] Researching web for: {app['name']}")
-    return search_web_info(app['name'])
-
-
-def run_llm(web_info):
-    from analysis.llm_analyzer import sendToOllama
-    return sendToOllama(web_info)
-
-
-def parse_result(llm_result):
-    from analysis.llm_analyzer import parseOllamaRes
-    return parseOllamaRes(llm_result)
+def analyze_app(app):
+    print(f"[*] Researching web for: {app.name}")
+    assessment = AnalysisService.analyze(app)
+    print(f"[v] Web info collected for {app.name}.")
+    return assessment
 
 
 def main():
     print("[*] Starting AppsAnalyst...")
 
-    # step 0: install and setup LLM (can comment out and assign dummy variable)
-    # lm_ready = setup_llm()
-    # if not lm_ready:
-    #     return
-
-    # step 1: load configuration (not implemented yet)
-
-    # step 2: scan registry and filesystem for apps
-    registry_apps, exe_apps = scan_apps()    
-    # Uncomment to skip step 2: 
-    # registry_apps, exe_apps = DUMMY_REGISTRY_APPS, DUMMY_EXE_APPS
-
-    # step 3: let user pick an application to analyze
-    app_to_analyze = select_app(registry_apps, exe_apps)  # or: app_to_analyze = registry_apps[0]
-    # Uncomment to skip step 3: 
-    # app_to_analyze = DUMMY_REGISTRY_APPS[0]
-    #or all of the dumm apps:
-    
-    
+    apps = scan_apps()
+    app_to_analyze = select_app(apps)
 
     if app_to_analyze:
-        # step 4: perform web research
-        web_info = research_web(app_to_analyze)
-        # Uncomment to skip step 4: 
-        # web_info = DUMMY_WEB_INFO
-        print(f"[v] Web info collected for {app_to_analyze['name']}.")
+        model_ready = setup_llm()
+        if model_ready is not True:
+            print(f"[!] LLM setup failed: {model_ready}")
+            return
 
-        # step 5: send to LLM and parse result
-        llm_result = run_llm(web_info)           # or: llm_result = DUMMY_LLM_RESPONSE
-        if llm_result:
-            risk_vector = parse_result(llm_result)   # or: risk_vector = [False, False, False, False]
-            print(f"[v] Risk Assessment Vector: {risk_vector}")
+        assessment = analyze_app(app_to_analyze)
+        print(f"[v] Risk Assessment Vector: {assessment.risk_flags}")
+        print(f"[v] Risk Level: {assessment.risk_level.title()}")
+        print(f"[v] Overview: {assessment.overview}")
+        print(f"[v] Recommended Action: {assessment.recommended_action}")
         print("[v] LLM analysis completed.")
     else:
         print("[!] No app selected for analysis.")
 
     print("[v] Scan completed.")
 
+
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1 and sys.argv[1] == "--gui":
-        install_missing_requirements()
+    configure_console_output()
+
+    args = sys.argv[1:]
+    auto_install = "--install-deps" in args
+    gui_mode = "--gui" in args
+
+    install_missing_requirements(auto_confirm=auto_install)
+
+    if gui_mode:
         from gui import run_gui
         run_gui()
     else:
-        install_missing_requirements()
         main()

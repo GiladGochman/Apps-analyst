@@ -157,6 +157,7 @@ output/
 # Security - don't commit sensitive data
 secrets.json
 config.local.json
+config.local.yaml
 *.key
 *.pem
 

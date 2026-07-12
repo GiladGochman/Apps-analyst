@@ -10,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from ui_models import AppRecord
 from ui_services import AnalysisService, RISK_DESCRIPTIONS, ScanService
+import ui_services.analysis_service as analysis_service_module
 
 
 def make_app_record() -> AppRecord:
@@ -176,3 +177,82 @@ def test_record_id_normalizes_case_and_whitespace() -> None:
         "install_location": r" C:\Program Files\TeamViewer ",
     }
     assert ScanService._record_id(raw, "registry") == "registry:teamviewer:15.0:c:\\program files\\teamviewer"
+
+
+def test_analyze_builds_assessment_when_web_search_has_no_results(monkeypatch) -> None:
+    app = make_app_record()
+    llm_text = """App Overview: No verifiable web profile was found
+
+Remote Administration: no
+Remote File Sharing: no
+Keylogging: no
+Server Hosting: no
+
+Capability Evidence:
+- Remote Administration: Not mentioned in the provided text.
+- Remote File Sharing: Not mentioned in the provided text.
+- Keylogging: Not mentioned in the provided text.
+- Server Hosting: Not mentioned in the provided text.
+
+Risk Level: low
+
+Why This Matters:
+Unknown software should still be verified before use.
+
+User Warning:
+Only run software from a trusted source.
+
+Recommended Action:
+Verify the source before keeping the application installed.
+"""
+
+    monkeypatch.setattr(
+        analysis_service_module,
+        "search_web_info",
+        lambda _app_name: "- Title: TeamViewer\n  Info: No web search results were found for this application.\n",
+    )
+    monkeypatch.setattr(analysis_service_module, "sendToOllama", lambda _web_info: llm_text)
+
+    assessment = AnalysisService.analyze(app)
+
+    assert assessment.app_id == app.record_id
+    assert assessment.risk_level == "low"
+    assert assessment.risk_flags == [False, False, False, False]
+    assert "verify the source" in assessment.recommended_action.lower()
+
+
+def test_build_assessment_upgrades_inconsistent_remote_access_result() -> None:
+    app = make_app_record()
+    llm_text = """App Overview: AnyDesk is a remote access and collaboration tool that allows users to remotely control computers, manage files, and communicate with others.
+
+Remote Administration: no
+Remote File Sharing: yes
+Keylogging: no
+Server Hosting: no
+
+Capability Evidence:
+- Remote Administration: Supports remote access and desktop management.
+- Remote File Sharing: Includes file transfer for managed devices.
+- Keylogging: Not mentioned in the provided text.
+- Server Hosting: Not mentioned in the provided text.
+
+Risk Level: low
+
+Detected Indicators:
+- Remote access
+- File transfer
+
+Why This Matters:
+Unexpected remote-control software can let a stranger access the device.
+
+User Warning:
+If you do not recognize this app, do not use it until you verify the source.
+
+Recommended Action:
+Confirm the software was intentionally installed and remove it if necessary.
+"""
+
+    assessment = AnalysisService._build_assessment(app, llm_text, [False, True, False, False])
+
+    assert assessment.risk_flags == [True, True, False, False]
+    assert assessment.risk_level == "high"

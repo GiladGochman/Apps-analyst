@@ -87,10 +87,11 @@ class ScanWorker(QObject):
     progress = Signal(str)
     error = Signal(str)
 
-    def __init__(self, include_registry: bool, include_filesystem: bool) -> None:
+    def __init__(self, include_registry: bool, include_filesystem: bool, scan_depth: str) -> None:
         super().__init__()
         self.include_registry = include_registry
         self.include_filesystem = include_filesystem
+        self.scan_depth = scan_depth
 
     def run(self) -> None:
         try:
@@ -100,6 +101,7 @@ class ScanWorker(QObject):
                     progress_callback=self.progress.emit,
                     include_registry=self.include_registry,
                     include_filesystem=self.include_filesystem,
+                    scan_depth=self.scan_depth,
                 )
             )
         except Exception as exc:
@@ -789,6 +791,9 @@ class MainWindow(QMainWindow):
         self.exe_scan_check = QCheckBox("EXE files")
         self.exe_scan_check.setChecked(True)
         topbar_layout.addWidget(self.exe_scan_check)
+        self.deep_scan_check = QCheckBox("Deep scan")
+        self.deep_scan_check.setChecked(ScanService.default_scan_depth() == "deep")
+        topbar_layout.addWidget(self.deep_scan_check)
         self.scan_button = QPushButton("Scan system")
         self.scan_button.setObjectName("PrimaryButton")
         topbar_layout.addWidget(self.scan_button)
@@ -828,6 +833,7 @@ class MainWindow(QMainWindow):
             return
         include_registry = self.registry_scan_check.isChecked()
         include_filesystem = self.exe_scan_check.isChecked()
+        scan_depth = "deep" if self.deep_scan_check.isChecked() else "standard"
         if not include_registry and not include_filesystem:
             QMessageBox.warning(self, "No scan source", "Select Registry, EXE files, or both before starting a scan.")
             return
@@ -838,17 +844,19 @@ class MainWindow(QMainWindow):
         if include_filesystem:
             selected_sources.append("EXE files")
         selection_label = " and ".join(selected_sources)
+        mode_label = "deep" if scan_depth == "deep" else "standard"
 
-        self.dashboard_page.set_scan_state(True, "Running", f"Scanning {selection_label}...")
+        self.dashboard_page.set_scan_state(True, "Running", f"Scanning {selection_label} in {mode_label} mode...")
         self.scan_button.setEnabled(False)
         self.registry_scan_check.setEnabled(False)
         self.exe_scan_check.setEnabled(False)
+        self.deep_scan_check.setEnabled(False)
         self.system_badge.setText("System status: Scanning")
         self.system_badge.setStyleSheet(chip_style("#172554", "#bfdbfe"))
-        self.statusBar().showMessage(f"System scan started: {selection_label}")
+        self.statusBar().showMessage(f"System scan started: {selection_label} ({mode_label})")
 
         self.scan_thread = QThread(self)
-        self.scan_worker = ScanWorker(include_registry, include_filesystem)
+        self.scan_worker = ScanWorker(include_registry, include_filesystem, scan_depth)
         self.scan_worker.moveToThread(self.scan_thread)
         self.scan_thread.started.connect(self.scan_worker.run)
         self.scan_worker.progress.connect(self._scan_progress)
@@ -958,6 +966,7 @@ class MainWindow(QMainWindow):
         self.scan_button.setEnabled(True)
         self.registry_scan_check.setEnabled(True)
         self.exe_scan_check.setEnabled(True)
+        self.deep_scan_check.setEnabled(True)
         self._refresh_state()
 
     def _cleanup_analysis_thread(self) -> None:

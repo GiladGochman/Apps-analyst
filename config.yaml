@@ -1,10 +1,6 @@
 # Configuration file
 app_settings:
-  scan_depth: "standard" # standard / deep
-
-api_keys:
-  search_api_key: "YOUR_KEY_HERE"
+  scan_depth: "deep" # standard / deep
 
 llm_settings:
-  model_path: "path/to/local/model"
-  model_name: "llama3"
+  model_name: "gemma3:1b"

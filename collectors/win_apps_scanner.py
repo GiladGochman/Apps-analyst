@@ -11,14 +11,16 @@ except Exception:  # pragma: no cover - optional dependency during runtime
 
 
 class WinAppsScanner:
-    def __init__(self):
+    def __init__(self, scan_depth=None):
         self.registry_paths = [
             (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
             (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
             (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
         ]
-        self.scan_depth = self._load_scan_depth()
-        self.max_filesystem_depth = 3 if self.scan_depth == "standard" else 6
+        configured_scan_depth = self._load_scan_depth()
+        requested_scan_depth = str(scan_depth or configured_scan_depth).strip().lower()
+        self.scan_depth = requested_scan_depth if requested_scan_depth in {"standard", "deep"} else configured_scan_depth
+        self.max_filesystem_depth = 3 if self.scan_depth == "standard" else 8
         self.file_scan_paths = self._default_file_scan_paths()
         self.skip_dir_names = {
             "$recycle.bin",
@@ -31,6 +33,7 @@ class WinAppsScanner:
             "temp",
             "tmp",
         }
+        self.skip_dir_prefixes = ("windows kits", "microsoft sdk", "reference assemblies")
 
     def _load_scan_depth(self):
         if yaml is None:
@@ -56,6 +59,23 @@ class WinAppsScanner:
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
             candidates.append(Path(local_app_data) / "Programs")
+            if self.scan_depth == "deep":
+                candidates.append(Path(local_app_data))
+
+        if self.scan_depth == "deep":
+            app_data = os.environ.get("APPDATA")
+            if app_data:
+                candidates.append(Path(app_data))
+                candidates.append(Path(app_data) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup")
+
+            program_data = os.environ.get("PROGRAMDATA")
+            if program_data:
+                candidates.append(Path(program_data) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup")
+
+            for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+                value = os.environ.get(env_name)
+                if value:
+                    candidates.append(Path(value))
 
         paths = []
         seen = set()
@@ -84,6 +104,8 @@ class WinAppsScanner:
                 continue
             if name.lower() in self.skip_dir_names:
                 continue
+            if any(name.lower().startswith(prefix) for prefix in self.skip_dir_prefixes):
+                continue
             if self._is_reparse_point(full_path):
                 continue
             allowed.append(name)
@@ -96,7 +118,11 @@ class WinAppsScanner:
         def handle_walk_error(error):
             print(f"[!] Failed to scan path {error.filename}: {error}")
 
+        visited_dirs = 0
         for root, dirs, files in os.walk(path, topdown=True, onerror=handle_walk_error):
+            visited_dirs += 1
+            if progress_callback and visited_dirs % 150 == 0:
+                progress_callback(f"Scanning {path}... {visited_dirs} directories visited")
             self._prune_dirs(path, root, dirs)
             for file in files:
                 if file.lower().endswith(".exe"):
@@ -159,9 +185,15 @@ class WinAppsScanner:
 
         if include_filesystem:
             if progress_callback:
-                progress_callback("Scanning common user folders for portable executables...")
+                scope = "common user folders" if self.scan_depth == "standard" else "extended application folders"
+                progress_callback(f"Scanning {scope} for portable executables...")
             print("[*] Starting filesystem scan for exe files...")
-            for path in self.file_scan_paths:
+            total_paths = len(self.file_scan_paths)
+            for index, path in enumerate(self.file_scan_paths, start=1):
+                if progress_callback:
+                    progress_callback(
+                        f"Scanning filesystem location {index}/{total_paths}: {path}"
+                    )
                 try:
                     for full_path in self._iter_executables(path, progress_callback=progress_callback):
                         app_info = {

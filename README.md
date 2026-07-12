@@ -47,6 +47,7 @@ Apps-Analyst is an innovative security awareness tool that helps users identify 
 - [Architecture](#architecture)
 - [Risk Assessment](#risk-assessment)
 - [Requirements](#requirements)
+- [Configuration](#️-configuration)
 - [Contributing](#contributing)
 - [License](#license)
 - [Contact](#contact)
@@ -139,9 +140,10 @@ python main.py
 
 ### Advanced Options
 
-- **Custom Model**: Modify `llm_analyzer.py` to use different Ollama models
-- **Scan Depth**: Adjust scanning parameters in `config.yaml`
+- **Custom Model**: Set `llm_settings.model_name` in `config.yaml` to use a different Ollama model
+- **Scan Depth**: Adjust `app_settings.scan_depth` (`standard` / `deep`) in `config.yaml`
 - **Export Formats**: PDF and CSV reports with detailed analysis
+- **Dependency Installation**: By default the app only warns about missing packages; pass `--install-deps` to `main.py` to install them automatically
 
 ---
 
@@ -149,26 +151,33 @@ python main.py
 
 ```
 Apps-Analyst/
-├── collectors/           # System scanning modules
-│   ├── win_apps_scanner.py    # Registry & filesystem scanning
-│   └── chrome_ext_scanner.py  # Browser extension analysis
-├── analysis/             # AI analysis components
+├── collectors/            # System scanning modules
+│   └── win_apps_scanner.py    # Registry & filesystem scanning
+├── analysis/              # AI analysis components
 │   ├── llm_analyzer.py        # Ollama LLM integration
 │   └── web_researcher.py      # DuckDuckGo web research
-├── utils/                # Utility functions
-│   ├── llm_setup.py           # Model management
-│   └── config management
-├── gui.py                # Graphical user interface
-├── main.py               # CLI entry point
-└── requirements.txt      # Python dependencies
+├── utils/                 # Utility functions
+│   ├── config.py               # config.yaml loading (scan depth, model name)
+│   └── llm_setup.py            # Model availability / pull management
+├── ui_services/           # Shared service layer used by both the GUI and CLI
+│   ├── scan_service.py         # Turns raw scan results into AppRecord objects
+│   ├── analysis_service.py     # Web research + LLM risk assessment
+│   └── export_service.py       # CSV / PDF report generation
+├── ui_models.py           # Shared dataclasses (AppRecord, RiskAssessment, ExportOptions)
+├── gui.py                 # Graphical user interface (PySide6)
+├── main.py                # CLI / process entry point
+├── config.yaml            # Scan depth + model name configuration
+└── requirements.txt       # Python dependencies
 ```
 
 ### Data Flow
 
-1. **Collection**: Registry + Filesystem scanning
+1. **Collection**: Registry + Filesystem scanning (`ui_services.ScanService`)
 2. **Research**: Web search for application information
-3. **Analysis**: LLM processing and risk assessment
-4. **Reporting**: PDF/CSV generation with recommendations
+3. **Analysis**: LLM processing and risk assessment (`ui_services.AnalysisService`)
+4. **Reporting**: PDF/CSV generation with recommendations (`ui_services.ExportService`)
+
+Both the GUI and the CLI (`main.py`) call into the same `ui_services` layer, so they stay behaviorally consistent.
 
 ---
 
@@ -211,21 +220,25 @@ The tool specifically addresses:
 ### Python Dependencies
 
 ```
-requests>=2.25.0
-pyyaml>=5.4.0
-beautifulsoup4>=4.9.0
-wmi>=1.5.0
-ollama>=0.1.0
-ddgs>=0.1.0
-tqdm>=4.50.0
-reportlab>=3.6.0
-setuptools>=50.0.0
+pyyaml>=6.0.0
+ollama>=0.6.0
+ddgs>=9.0.0
+reportlab>=4.0.0
+setuptools>=70.0.0
+PySide6>=6.7.0
+shiboken6>=6.7.0
 ```
 
 ### External Dependencies
 
 - **Ollama**: Local LLM runtime
 - **Gemma 3.1B**: AI model for analysis
+
+---
+
+## ⚙️ Configuration
+
+`config.yaml` only holds non-secret settings (scan depth, model name). It is tracked in git, so **do not put API keys or other secrets in it**. If a future feature needs a secret (e.g. a keyed search API), put it in a `config.local.yaml` file instead — that filename is already excluded via `.gitignore` — or load it from an environment variable.
 
 ---
 
@@ -281,4 +294,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-_Last updated: March 2026_
+_Last updated: July 2026_

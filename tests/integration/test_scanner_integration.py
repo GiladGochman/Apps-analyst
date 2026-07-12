@@ -52,3 +52,31 @@ def test_filesystem_scan_skips_ignored_directories(tmp_path: Path) -> None:
 
     assert str(allowed_exe) in discovered_paths
     assert str(ignored_exe) not in discovered_paths
+
+
+def test_standard_scan_depth_does_not_reach_deep_nested_executable(tmp_path: Path) -> None:
+    exe_path = tmp_path / "level1" / "level2" / "level3" / "level4" / "deep_tool.exe"
+    exe_path.parent.mkdir(parents=True)
+    exe_path.write_text("deep executable", encoding="utf-8")
+
+    scanner = WinAppsScanner(scan_depth="standard")
+    scanner.file_scan_paths = [str(tmp_path)]
+
+    _registry_apps, exe_apps = scanner.scan(include_registry=False, include_filesystem=True)
+
+    discovered_paths = {app["install_location"] for app in exe_apps}
+    assert str(exe_path) not in discovered_paths
+
+
+def test_deep_scan_depth_reaches_deep_nested_executable(tmp_path: Path) -> None:
+    exe_path = tmp_path / "level1" / "level2" / "level3" / "level4" / "deep_tool.exe"
+    exe_path.parent.mkdir(parents=True)
+    exe_path.write_text("deep executable", encoding="utf-8")
+
+    scanner = WinAppsScanner(scan_depth="deep")
+    scanner.file_scan_paths = [str(tmp_path)]
+
+    _registry_apps, exe_apps = scanner.scan(include_registry=False, include_filesystem=True)
+
+    discovered_paths = {app["install_location"] for app in exe_apps}
+    assert str(exe_path) in discovered_paths
